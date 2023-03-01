@@ -1,19 +1,4 @@
-"""s&p_500_momentum.py
-
-Idea is to compare two equally weighted strategies
-1) simple buy and hold of each stock
-2) filter out N stock based on their price momentum
-
-compare return and risk
-* with and without liquidity filter
-* with and without transaction costs
-* compare various momentum filters
-* use various rebalance frequencies (monthly and quarterly)
-
-Conclusion:
-One can find a strategy that has a higher return while including transaction costs and quarterly rebalancing.
-However the number of stocks needs to be small (around 10) and the Sharpe ratio of EQW is higher.
-"""
+"""low_volatility.py"""
 
 import pandas as pd
 import datetime as dt
@@ -26,7 +11,7 @@ from file_paths_HIDDEN import SPX_STOCK_VOLUME_FILE_PATH
 # import stuff used for index construction
 from strategy_building_blocks.strategy import Strategy
 from strategy_building_blocks.backtest_calendar import BacktestCalendar
-from strategy_building_blocks.filters import PerformanceFilter
+from strategy_building_blocks.filters import VolatilityFilter
 from strategy_building_blocks.filters import LiquidityFilter
 from strategy_building_blocks.filter_handler import FilterHandler
 from strategy_building_blocks.weight import EqualWeight
@@ -59,14 +44,14 @@ def get_data(file_path: str, ffill_na: bool = True)->pd.DataFrame:
 def main():
     # __________________________________________________________________________________________________________________
     # parameters
-    top_perfs = 25
-    avg_return_lag = [20, 60, 120]  # average of 20, 60 and 120-day price return
+    portfolio_size = 25
+    vol_lag = [20, 60]  # maximum of 20 and 60 days volatility
     liquidity_threshold = 10_000_000
     liq_avg_lag = 60  # the observation window for calculating average liquidity
     transaction_costs = 0.0015
 
     save_results = True
-    plot_results = True
+    plot_results = False
 
     # __________________________________________________________________________________________________________________
     # get the data
@@ -89,10 +74,10 @@ def main():
     # first setup a liquidity filter
     liquidity_filter = LiquidityFilter(avg_lag=liq_avg_lag, liquidity_threshold=liquidity_threshold,
                                        price_df=daily_adj_close_df, volume_df=daily_volume_df)
-    # momentum filter
-    momentum_filter = PerformanceFilter(observation_lag=avg_return_lag, filter_type='top', value=top_perfs, price_df=daily_adj_close_df)
-
-    liq_mom_filter = FilterHandler(filter_collection=[liquidity_filter, momentum_filter])
+    # low volatility filter
+    low_vol_filter = VolatilityFilter(vol_lag=vol_lag, value=portfolio_size, price_df=daily_adj_close_df,
+                                      winsorize_lower_pct=0.1)
+    liq_low_vol_filter = FilterHandler(filter_collection=[liquidity_filter, low_vol_filter])
 
     # step 3: set up the weighting scheme
     eqw = EqualWeight()
@@ -102,19 +87,19 @@ def main():
     strat = Strategy(instrument_price_df=daily_adj_close_df,
                      calendar=calendar,
                      weight=eqw,
-                     strategy_filter=liq_mom_filter,
+                     strategy_filter=liq_low_vol_filter,
                      transaction_costs=transaction_costs)
 
-    # run the back test of the momentum strategy
-    mom_bt_df = strat.run_backtest()
-    mom_bt_df.columns = ['MOM_EQW']
+    # run the back test of the low volatility strategy
+    low_vol_bt_df = strat.run_backtest()
+    low_vol_bt_df.columns = ['LOW_VOL_EQW']
 
     # run the back test of the benchmark
     strat.strategy_filter = liquidity_filter
     eqw_bt_df = strat.run_backtest()
     eqw_bt_df.columns = ['EQW']
 
-    bt_df = mom_bt_df.join(eqw_bt_df)  # combine into one DataFrame
+    bt_df = low_vol_bt_df.join(eqw_bt_df)  # combine into one DataFrame
 
     # __________________________________________________________________________________________________________________
     # analysis
@@ -123,7 +108,7 @@ def main():
 
     if save_results:
         # save result in excel
-        strategy_name = 's&p_500_momentum'
+        strategy_name = 's&p_500_low_volatility'
         save_file_path = SAVE_FOLDER_PATH_BACKTEST / f'{strategy_name}_{dt.date.today().strftime("%Y%m%d")}.xlsx'
         save_and_format_excel(data={'performance': bt_df, 'risk & return': result_df}, save_file_path=save_file_path)
 
