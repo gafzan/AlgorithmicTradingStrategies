@@ -59,8 +59,8 @@ def get_data(file_path: str, ffill_na: bool = True)->pd.DataFrame:
 def main():
     # __________________________________________________________________________________________________________________
     # parameters
-    top_perfs = 25
-    avg_return_lag = [20, 60, 120]  # average of 20, 60 and 120-day price return
+    top_perfs = 15
+    avg_return_lag = [20, 60, 120, 250, [20, 60], [20, 120], [20, 60, 120], [20, 60, 250]]   # average of 20, 60 and 120-day price return
     liquidity_threshold = 10_000_000
     liq_avg_lag = 60  # the observation window for calculating average liquidity
     transaction_costs = 0.0015
@@ -78,7 +78,7 @@ def main():
     # step 1: define the calendar
     calendar = BacktestCalendar(
         rebalance_rules={
-                'start_date': '1/1/2000',
+                'start_date': '1/1/2015',
                 'days': -1,
                 'frequency': 'monthly'
             },
@@ -90,9 +90,8 @@ def main():
     liquidity_filter = LiquidityFilter(avg_lag=liq_avg_lag, liquidity_threshold=liquidity_threshold,
                                        price_df=daily_adj_close_df, volume_df=daily_volume_df)
     # momentum filter
-    momentum_filter = PerformanceFilter(observation_lag=avg_return_lag, filter_type='top', value=top_perfs, price_df=daily_adj_close_df)
-
-    liq_mom_filter = FilterHandler(filter_collection=[liquidity_filter, momentum_filter])
+    momentum_filter = PerformanceFilter(filter_type='top', value=top_perfs, price_df=daily_adj_close_df,
+                                        observation_lag=1)
 
     # step 3: set up the weighting scheme
     eqw = EqualWeight()
@@ -102,19 +101,27 @@ def main():
     strat = Strategy(instrument_price_df=daily_adj_close_df,
                      calendar=calendar,
                      weight=eqw,
-                     strategy_filter=liq_mom_filter,
                      transaction_costs=transaction_costs)
+    bt_df = None
+    for lag in avg_return_lag:
+        momentum_filter.observation_lag = lag
+        liq_mom_filter = FilterHandler(filter_collection=[liquidity_filter, momentum_filter])
+        strat.strategy_filter = liq_mom_filter
 
-    # run the back test of the momentum strategy
-    mom_bt_df = strat.run_backtest()
-    mom_bt_df.columns = ['MOM_EQW']
+        # run the back test of the momentum strategy
+        mom_bt_df = strat.run_backtest(strategy_calculation_method='advanced')
+        mom_bt_df.columns = [f'MOM_EQW {lag}']
+        if bt_df is None:
+            bt_df = mom_bt_df.copy()
+        else:
+            bt_df = bt_df.join(mom_bt_df)
 
     # run the back test of the benchmark
     strat.strategy_filter = liquidity_filter
-    eqw_bt_df = strat.run_backtest()
+    eqw_bt_df = strat.run_backtest(strategy_calculation_method='advanced')
     eqw_bt_df.columns = ['EQW']
 
-    bt_df = mom_bt_df.join(eqw_bt_df)  # combine into one DataFrame
+    bt_df = bt_df.join(eqw_bt_df)  # combine into one DataFrame
 
     # __________________________________________________________________________________________________________________
     # analysis
@@ -123,7 +130,7 @@ def main():
 
     if save_results:
         # save result in excel
-        strategy_name = 's&p_500_momentum'
+        strategy_name = 's&p_500_momentum_monthly'
         save_file_path = SAVE_FOLDER_PATH_BACKTEST / f'{strategy_name}_{dt.date.today().strftime("%Y%m%d")}.xlsx'
         save_and_format_excel(data={'performance': bt_df, 'risk & return': result_df}, save_file_path=save_file_path)
 
